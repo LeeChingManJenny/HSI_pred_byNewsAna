@@ -8,6 +8,42 @@ import torch
 from torch.utils.data import Dataset
 import torch.nn as nn
 from torch.nn.utils.rnn import pad_sequence
+import numpy as np
+from transformers import DistilBertTokenizer, DistilBertModel
+
+def get_embeddings(texts, batch_size=32):
+    model_name = "distilbert-base-uncased"
+    tokenizer = DistilBertTokenizer.from_pretrained(model_name)
+    model = DistilBertModel.from_pretrained(model_name)
+
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    model = model.to(device)
+    
+    model.eval()
+    embeddings = []
+    
+    # Process in batches to handle large datasets
+    for i in range(0, len(texts), batch_size):
+        batch = texts[i:i+batch_size]
+        
+        # Tokenize
+        inputs = tokenizer(
+            batch,
+            padding=True,
+            truncation=True,
+            max_length=128,  # Adjust based on headline length
+            return_tensors="pt"
+        ).to(device)
+        
+        # Get embeddings
+        with torch.no_grad():
+            outputs = model(**inputs)
+        
+        # Use [CLS] token embeddings as sentence representation
+        cls_embeddings = outputs.last_hidden_state[:, 0, :].cpu().numpy()
+        embeddings.extend(cls_embeddings)
+    
+    return embeddings
 
 class StockNewsDataset(Dataset):
     """"
@@ -15,58 +51,77 @@ class StockNewsDataset(Dataset):
     stock_data: OLHCV of stock data each day
     news_grouped["Date"] == stock_data["Date"]
     """
-    def __init__(self, news_grouped, stock_data):
+    def __init__(self, news_grouped, stock_data,target_mean=None, target_std=None ):
         self.news_grouped = news_grouped
-        self.dates = list(news_grouped.keys()) # date appear in news_group
+        self.max_news = max(len(v) for v in news_grouped.values())
         self.stock_data = stock_data
+        self.dates = sorted(news_grouped.keys())
         #self.max_news_length = max_news_length
-        self.embed_dim = len(news_grouped[self.dates[0]][0]) if self.dates else 0 #number of embaddings in one row
+        self.embed_dim = len(news_grouped[self.dates[0]][0]) if self.dates else 0 
+        #number of embaddings in one row
+        
+        self.target_mean = target_mean
+        self.target_std = target_std
+        
 
     def __len__(self):
         return len(self.dates)
 
     def __getitem__(self, idx):
         date = self.dates[idx]
-        news_emb = torch.tensor(self.news_grouped[date], dtype=torch.float32) #convert to tensor formate
-        # Pad news embeddings
-        if news_emb.shape[0] < self.max_news_length:
-            pad = torch.zeros(self.max_news_length - len(news_emb), self.embed_dim)
-            news_emb = torch.cat([news_emb, pad])
-        else:
-            news_emb = news_emb[:self.max_news_length]
+        news = self.news_grouped[date]
+        padded = np.zeros((self.max_news, self.embed_dim))
+        padded[:len(news)] = np.stack(news)
+        mask = [0] * len(news) + [1] * (self.max_news - len(news))
         
-        stock_feat = torch.tensor(self.stock_data.loc[date].drop('target'), dtype=torch.float32).squeeze()#convert to tensor formate
-        target = torch.tensor(self.stock_data.loc[date]['target'], dtype=torch.float32)#convert to tensor formate
-        return news_emb, stock_feat, target # X_news, X_stock, y
+        news_emb = torch.tensor(padded, dtype=torch.float32) #convert to tensor formate
+        news_mask = torch.tensor(mask, dtype=torch.bool)
+        
+        value = self.stock_data.loc[date].drop('target').values
+        num_news = len(news)
+        stock_feat = torch.tensor(value.reshape(-1, 5), dtype=torch.float32)#convert to tensor formate
+    
+        target = self.stock_data.loc[date]['target']
+        if self.target_mean is not None and self.target_std is not None:
+            target = (target - self.target_mean) / self.target_std
+            
+        target = torch.tensor(target, dtype=torch.float32)#convert to tensor formate
+        return news_emb,news_mask, stock_feat, target, num_news # X_news, X_stock, y
 
-def collate_fn(batch):
+def collate_fn(batch): # pack everydays data into one
     # Sort by news length
-    batch.sort(key=lambda x: x['num_news'], reverse=True)
+    news_embs, news_masks, stock_feats, targets, num_news = zip(*batch)
+    
+    #batch.sort(key=lambda x: x['num_news'], reverse=True)
+    sorted_indices = sorted(range(len(num_news)), key=lambda i: num_news[i], reverse=True)
+    news_embs = [news_embs[i] for i in sorted_indices]
+    news_masks = [news_masks[i] for i in sorted_indices]
+    stock_feats = [stock_feats[i] for i in sorted_indices]
+    targets = [targets[i] for i in sorted_indices]
     
     # Pad news embeddings
-    news_padded = pad_sequence(
-        [item['news_embeddings'] for item in batch],
-        batch_first=True,
-        padding_value=0
-    )
+    news_padded = torch.stack(news_embs)
+    news_masks = torch.stack(news_masks)
+    stock_feats = torch.stack(stock_feats)
+    targets = torch.stack(targets)
     
-    # Create news masks
-    news_masks = torch.stack([
-        torch.cat([
-            torch.ones(item['num_news']),
-            torch.zeros(news_padded.size(1) - item['num_news'])
-        ]) for item in batch
-    ]).bool()
-    
-    # Stack stock features (batch_size, num_stocks, 5)
-    stock_features = torch.stack([item['stock_features'] for item in batch])
-    
-    return {
-        'news_embeddings': news_padded,
-        'news_masks': news_masks,
-        'stock_features': stock_features
-    }
-   
+    return news_padded, news_masks, stock_feats, targets
+
+
+""""
+batch_size means number of date
+
+news_padded: (batch_size, max_news, embedding_size = 786)
+news_mask: (batch_size, max_news)
+stock_input: (batch_size, num_stocks, num_feat = 5)
+
+encoded_news: (batch_size, max_news, 128)
+encoded_stock: (batch_size, num_stocks, 128)
+cross_att_output: (batch_size, num_stocks, 128)
+
+findal_pred: (batch_size,)
+
+"""
 class AttentionModel(nn.Module):
     """"
     news_embed_dim: number of embeding in news_grouped
@@ -75,42 +130,79 @@ class AttentionModel(nn.Module):
     max_news_length: maximum number of array in news_grouped per day, check "size" of news_grouped in each row
     news_emb, stock_feat: get from class StockNewsDataset.__getitem__
     """
-    def __init__(self, news_embed_dim, stock_feat_dim, num_heads):
+    def __init__(self, news_feat=768, stock_feat=5, d_model=128, num_heads=8):
         super().__init__()
-        #self.max_news_length = max_news_length #50
+        self.scale = nn.Parameter(torch.tensor(1.0))
+        self.shift = nn.Parameter(torch.tensor(0.0))
+        self.aggregation_weight = nn.Linear(d_model, 1)
+        # News Encoder (Self-Attention)
+        self.news_proj = nn.Linear(news_feat, d_model)
+        self.news_attn = nn.TransformerEncoder(
+                nn.TransformerEncoderLayer(
+                d_model=d_model,
+                nhead=num_heads,
+                activation='gelu',
+                batch_first=True
+            ),
+            num_layers=2  # Add depth
+        )
         
-        # Self-attention layer
-        # = news_embed_dim* num_heads
-        self.self_attn = nn.MultiheadAttention(news_embed_dim, num_heads)
+        # Stock Encoder (MLP for each stock)
+        self.stock_encoder = nn.Sequential(
+            nn.Linear(stock_feat, d_model),
+            nn.LayerNorm(d_model),
+            nn.GELU(),
+            nn.Linear(d_model, d_model),
+            nn.LayerNorm(d_model)
+        )
         
-        # Project stock features to query
-        self.stock_proj = nn.Linear(stock_feat_dim, news_embed_dim)
+        # Cross-Attention (Stock-to-News)
+        self.cross_attn = nn.MultiheadAttention(
+            embed_dim=d_model, num_heads=num_heads, batch_first=True,  dropout = 0.05
+        )
         
-        # Cross-attention layer
-        self.cross_attn = nn.MultiheadAttention(news_embed_dim, num_heads)
-        
-        # Prediction layers
+        # Predictor
         self.fc = nn.Sequential(
-            nn.Linear(news_embed_dim + stock_feat_dim, 128),
-            nn.ReLU(),
+            nn.Linear(d_model, 256),
+            nn.LayerNorm(256),
+            nn.GELU(),
+            nn.Dropout(0.2),
+            nn.Linear(256, 128),
+            nn.LayerNorm(128),
+            nn.GELU(),
             nn.Linear(128, 1)
         )
 
-    def forward(self, news_emb, stock_feat):
-        # news_emb: (seq_len, batch=1, embed_dim)
-        batch_size = news_emb.size(0)
-        news_emb = news_emb.permute(1, 0, 2)  # (seq_len, 1, embed_dim)
+    def forward(self, news, news_mask, stock):
+         # News Encoding: (B, max_news, 300) → (B, max_news, 128)
+         news_proj = self.news_proj(news)
+         news_encoded = self.news_attn(news_proj, src_key_padding_mask=news_mask)
+         
+         # Stock Encoding: (B, num_stocks, 5) → (B, num_stocks, 128)
+         stock_proj = self.stock_encoder[0](stock)
+         stock_encoded = self.stock_encoder[1:](stock_proj) + stock_proj
+         
+         # Cross-Attention: Stock → News
+         # Query: Stock features (B, num_stocks, 128)
+         # Key/Value: News features (B, max_news, 128)
+         for layer in [self.news_proj, self.stock_encoder[0]]:
+             nn.init.kaiming_normal_(layer.weight, nonlinearity='relu')
         
-        # Self-attention
-        self_attn_out, _ = self.self_attn(news_emb, news_emb, news_emb)
-        
-        # Cross-attention (query from stock, key/value from news)
-        q = self.stock_proj(stock_feat).unsqueeze(0)
-        q = q.permute(1, 0, 2)
-        #q = self.stock_proj(stock_feat).unsqueeze(0).unsqueeze(0)  # (1, 1, embed_dim)
-        cross_attn_out, _ = self.cross_attn(q, self_attn_out, self_attn_out)
-        ad = cross_attn_out.squeeze(0)
-        
-        # Concatenate with stock features
-        combined = torch.cat([ad, stock_feat], dim=1)
-        return self.fc(combined)
+         attn_output, _ = self.cross_attn(
+             query=stock_encoded,
+             key=news_encoded,
+             value=news_encoded,
+             key_padding_mask=news_mask,
+             attn_mask=None,  # Add causal mask if needed
+             need_weights=False
+         )
+         
+
+         attn_output = attn_output + stock_encoded
+         # Aggregate across stocks (weighted sum)
+         aggregation_weights = torch.softmax(self.aggregation_weight(attn_output), dim=1)
+         aggregated = (attn_output * aggregation_weights).sum(dim=1)
+   
+         # Prediction
+         output = self.fc(aggregated).squeeze(-1)  # Shape: (B,)
+         return output
