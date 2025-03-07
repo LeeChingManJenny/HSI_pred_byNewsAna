@@ -1,5 +1,5 @@
 # Stock_ANA
-
+Reference: Wang, M., Cohen, S. B., & Ma, T. (2024). Modeling news interactions and influence for financial market prediction. arXiv (Cornell University). https://doi.org/10.48550/arxiv.2410.10614
 ## File management:
 - web_scr.py: helper function for get_news.py to get news record from futu
 - get_news.py: to get 'fina_news.csv.gz' and 'fina_news_senti.csv.gz'
@@ -45,3 +45,9 @@
 
 
 #### class AttentionModel(nn.Module)
+1. get news_encoded and stock_encoded by passing through news_padded, stock_feats into encoder layer. The shape is transfore to (<Batch>, <max_news>/<stock_feat_num>, <d_model>)
+2. get attn_output by 1. passing (news_encoded,stock_encoded) through another cross layer to get news feature 2. adding the stock_encoded feature
+3. aggregate news feature and stock feature by weighted sum
+4. predict by pass through a sequential model
+
+
