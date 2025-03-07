@@ -11,6 +11,8 @@ os.chdir(script_dir)
 import news_ana
 import numpy as np
 import torch
+import finin
+#%%
 
 stock_df, news_grouped, dataset,dataloader,stock_feat = news_ana.read_data(update = 0)
 train_dataset, val_dataset, train_loader,val_loader = news_ana.train_test_split(stock_df, news_grouped)
@@ -41,7 +43,22 @@ stock_tensor = torch.tensor(
     dtype=torch.float32
 ).unsqueeze(0)
 
-model = torch.load_state_dict(torch.load("finin_model0703.pth", weights_only=True))
+
+model = finin.AttentionModel(
+    news_feat=768, 
+    stock_feat=5, 
+    d_model=128, 
+    num_heads=8
+)
+
+model.load_state_dict(
+    torch.load(
+        "finin_model0703.pth",
+        map_location=torch.device('cpu'),  # Add device mapping
+        weights_only=True
+    )
+)
+
 model.eval()
 
 with torch.no_grad():
