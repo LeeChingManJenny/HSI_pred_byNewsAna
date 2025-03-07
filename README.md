@@ -2,10 +2,11 @@
 Reference: Wang, M., Cohen, S. B., & Ma, T. (2024). Modeling news interactions and influence for financial market prediction. arXiv (Cornell University). https://doi.org/10.48550/arxiv.2410.10614
 ## File management:
 - web_scr.py: helper function for get_news.py to get news record from futu
-- get_news.py: to get 'fina_news.csv.gz' and 'fina_news_senti.csv.gz'
+- get_news.py: to get *'fina_news.csv.gz'* and *'fina_news_senti.csv.gz'*
 - news_ana.py: convert stock_df and news_df into sutable formate and conduct training of the model
 - finin.py: the model
 - run_file.py: to run the whole project
+- news_ana_prob.py and finin_prob.py are file for predicting the probability of HSI goes up, use the same run_file and add *"probability = torch.sigmoid(prediction).item()"* to *"with torch.no_grad()"* to get the one day prediction value.
 
 ## Key field of functions:
 
