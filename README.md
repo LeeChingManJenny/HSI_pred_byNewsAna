@@ -6,7 +6,7 @@ Reference: Wang, M., Cohen, S. B., & Ma, T. (2024). Modeling news interactions a
 - news_ana.py: convert stock_df and news_df into sutable formate and conduct training of the model
 - finin.py: the model
 - run_file.py: to run the whole project
-- news_ana_prob.py and finin_prob.py are file for predicting the probability of HSI goes up, use the same run_file and add *"probability = torch.sigmoid(prediction).item()"* to *"with torch.no_grad()"* to get the one day prediction value.
+- news_ana_prob.py and finin_prob.py are file for predicting the probability of HSI goes up, use the same run_file and add *"probability = torch.sigmoid(prediction).item()"* to *"with torch.no_grad()"* to get the one day prediction value. It's BCE loss is Train Loss = 0.7258, Val Loss = 0.6405
 
 ## Key field of functions:
 
