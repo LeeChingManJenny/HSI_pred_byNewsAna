@@ -1,5 +1,7 @@
 # Stock_ANA
-Reference: Wang, M., Cohen, S. B., & Ma, T. (2024). Modeling news interactions and influence for financial market prediction. arXiv (Cornell University). https://doi.org/10.48550/arxiv.2410.10614
+This project is aim at predicting the percentage change of the HSI by analysing news data get from *https://news.futunn.com/hk/main* and the daily information (Open Low High Close Volumn) of multiple index from yfinance. The core part of the model is built by torch, with the model architecture refer from the reference. This model has a huberloss of around 0.4.
+
+_Reference_: Wang, M., Cohen, S. B., & Ma, T. (2024). Modeling news interactions and influence for financial market prediction. arXiv (Cornell University). https://doi.org/10.48550/arxiv.2410.10614
 ## File management:
 - web_scr.py: helper function for get_news.py to get news record from futu
 - get_news.py: to get *'fina_news.csv.gz'* and *'fina_news_senti.csv.gz'*
