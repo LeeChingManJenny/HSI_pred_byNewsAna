@@ -4,7 +4,11 @@ This project is aim at predicting the percentage change of the HSI by analysing 
 ![metrics](https://github.com/user-attachments/assets/51d6a4b5-8225-48ac-8644-e943a08698d8)
 
 _Reference_: Wang, M., Cohen, S. B., & Ma, T. (2024). Modeling news interactions and influence for financial market prediction. arXiv (Cornell University). https://doi.org/10.48550/arxiv.2410.10614
-*Run the program by execute run_file.py*
+
+##### Root file
+```
+run_file.py
+```
 
 ## File management:
 - web_scr.py: helper function for get_news.py to get news record from futu
