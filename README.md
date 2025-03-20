@@ -1,7 +1,7 @@
 # HSI_pred_byNewsAna
 This project is aim at predicting the percentage change of the HSI by analysing news data get from *https://news.futunn.com/hk/main* and the daily information (Open Low High Close Volumn) of multiple index from yfinance. The core part of the model is built by torch, with the model architecture refer from the reference. This model has a huberloss of around 0.4.
 
-![alt text](https://github.com/LeeChingManJenny/HSI_pred_byNewsAna/edit/main/metrics.png?raw=true)
+![metrics](https://github.com/user-attachments/assets/cee4f69c-1ac7-4f05-a48a-7eff68506f3d)
 
 _Reference_: Wang, M., Cohen, S. B., & Ma, T. (2024). Modeling news interactions and influence for financial market prediction. arXiv (Cornell University). https://doi.org/10.48550/arxiv.2410.10614
 ## File management:
