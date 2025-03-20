@@ -109,6 +109,31 @@ def collate_fn(batch): # pack everydays data into one
 
 
 """"
+"""
+
+class EarlyStopping:
+    def __init__(self, patience=5, min_delta=0):
+        """
+        Args:
+            patience (int): How many epochs to wait after last time validation loss improved.
+            min_delta (float): Minimum change in validation loss to qualify as an improvement.
+        """
+        self.patience = patience
+        self.min_delta = min_delta
+        self.best_loss = np.inf
+        self.wait = 0
+        self.stop_training = False
+
+    def __call__(self, val_loss):
+        if val_loss < self.best_loss - self.min_delta:
+            self.best_loss = val_loss
+            self.wait = 0
+        else:
+            self.wait += 1
+            if self.wait >= self.patience:
+                self.stop_training = True
+                
+""""
 batch_size means number of date
 
 news_padded: (batch_size, max_news, embedding_size = 786)
@@ -135,6 +160,8 @@ class AttentionModel(nn.Module):
         self.scale = nn.Parameter(torch.tensor(1.0))
         self.shift = nn.Parameter(torch.tensor(0.0))
         self.aggregation_weight = nn.Linear(d_model, 1)
+        
+        
         # News Encoder (Self-Attention)
         self.news_proj = nn.Linear(news_feat, d_model)
         self.news_attn = nn.TransformerEncoder(
@@ -144,10 +171,10 @@ class AttentionModel(nn.Module):
                 activation='gelu',
                 batch_first=True
             ),
-            num_layers=2  # Add depth
+            num_layers=3  # Add depth
         )
         
-        # Stock Encoder (MLP for each stock)
+        # Stock Encoder (MLP Approach)
         self.stock_encoder = nn.Sequential(
             nn.Linear(stock_feat, d_model),
             nn.LayerNorm(d_model),
@@ -156,21 +183,32 @@ class AttentionModel(nn.Module):
             nn.LayerNorm(d_model)
         )
         
+        # Stock Encoder (LSTM Approach)
+        self.stock_proj = nn.Linear(stock_feat, d_model)
+        self.stock_lstm = nn.LSTM(
+            input_size=d_model,
+            hidden_size=d_model,
+            num_layers=1,  # Depth of LSTM
+            batch_first=True,
+            dropout=0.2  # Optional dropout for multi-layer
+        )
+        self.stock_norm = nn.LayerNorm(d_model)  # Stabilize LSTM outputs
+        
+        
         # Cross-Attention (Stock-to-News)
         self.cross_attn = nn.MultiheadAttention(
-            embed_dim=d_model, num_heads=num_heads, batch_first=True,  dropout = 0.05
+            embed_dim=d_model, num_heads=num_heads, batch_first=True,  dropout = 0.2
         )
         
         # Predictor
         self.fc = nn.Sequential(
             nn.Linear(d_model, 256),
             nn.LayerNorm(256),
-            nn.GELU(),
-            nn.Dropout(0.2),
-            nn.Linear(256, 128),
-            nn.LayerNorm(128),
-            nn.GELU(),
-            nn.Linear(128, 1)
+            nn.Linear(256, 64),
+            nn.LayerNorm(64),
+            nn.SELU(),
+            nn.Dropout(0.3),
+            nn.Linear(64, 1)
         )
 
     def forward(self, news, news_mask, stock):
@@ -178,9 +216,15 @@ class AttentionModel(nn.Module):
          news_proj = self.news_proj(news)
          news_encoded = self.news_attn(news_proj, src_key_padding_mask=news_mask)
          
+         """
          # Stock Encoding: (B, num_stocks, 5) → (B, num_stocks, 128)
          stock_proj = self.stock_encoder[0](stock)
          stock_encoded = self.stock_encoder[1:](stock_proj) + stock_proj
+         """
+         # Stock Encoding: LSTM Approach
+         stock_proj = self.stock_proj(stock)  # (B, seq_len, d_model)
+         stock_lstm_out, _ = self.stock_lstm(stock_proj)  # Process sequence
+         stock_encoded = self.stock_norm(stock_lstm_out) + stock_proj  # Residual
          
          # Cross-Attention: Stock → News
          # Query: Stock features (B, num_stocks, 128)
@@ -189,16 +233,14 @@ class AttentionModel(nn.Module):
              nn.init.kaiming_normal_(layer.weight, nonlinearity='relu')
         
          attn_output, _ = self.cross_attn(
-             query=stock_encoded,
-             key=news_encoded,
-             value=news_encoded,
-             key_padding_mask=news_mask,
-             attn_mask=None,  # Add causal mask if needed
-             need_weights=False
+            query=stock_encoded,
+            key=news_encoded,
+            value=news_encoded,
+            key_padding_mask=news_mask
          )
+         attn_output = self.stock_norm(attn_output + stock_encoded) 
+         #attn_output = attn_output + stock_encoded
          
-
-         attn_output = attn_output + stock_encoded
          # Aggregate across stocks (weighted sum)
          aggregation_weights = torch.softmax(self.aggregation_weight(attn_output), dim=1)
          aggregated = (attn_output * aggregation_weights).sum(dim=1)
