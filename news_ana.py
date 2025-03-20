@@ -18,6 +18,8 @@ import torch.nn as nn
 from torch.utils.data import DataLoader
 from tqdm import tqdm
 import gc
+import numpy as np
+import matplotlib.pyplot as plt
 
 #%%
 def read_data(update = 0, BATCH_SIZE = 16):
@@ -85,7 +87,7 @@ def read_data(update = 0, BATCH_SIZE = 16):
     news_grouped_ana = {date: news_grouped[date] for date in sorted_dates}
     news_grouped_ana.popitem()
     
-    dataset = finin.StockNewsDataset(news_grouped_ana, stock_df_ana)
+    dataset = finin.StockNewsDataset(news_grouped_ana, stock_df_ana, target_mean=abs(stock_df['target'].mean()), target_std=stock_df['target'].std())
     dataloader = DataLoader(
         dataset, 
         batch_size= BATCH_SIZE, 
@@ -104,9 +106,15 @@ def read_data(update = 0, BATCH_SIZE = 16):
 def train_test_split(stock_df, news_grouped, BATCH_SIZE = 16):
     
     stock_df_ana = stock_df.dropna()
-    sorted_dates = sorted(news_grouped.keys())  # Sort keys as strings
+    sorted_dates = sorted(stock_df_ana.index.strftime("%Y-%m-%d"))  # Sort keys as strings
     news_grouped_ana = {date: news_grouped[date] for date in sorted_dates}
-    news_grouped_ana.popitem()
+    
+    stock_df_ana_target = stock_df_ana['target'].values
+    all_stock = (stock_df-stock_df_ana.mean()) / stock_df_ana.std()
+    all_dataset = finin.StockNewsDataset(news_grouped_ana, all_stock, target_mean=stock_df_ana_target.mean(), target_std=stock_df_ana_target.std())
+    all_loader = DataLoader(all_dataset, batch_size=BATCH_SIZE, collate_fn=finin.collate_fn)
+    
+    print("aha!")
     
     dates = sorted(news_grouped_ana.keys())
     split_idx = int(0.8 * len(dates))  
@@ -131,11 +139,11 @@ def train_test_split(stock_df, news_grouped, BATCH_SIZE = 16):
     train_loader = DataLoader(train_dataset, batch_size=BATCH_SIZE, collate_fn=finin.collate_fn)
     val_loader = DataLoader(val_dataset, batch_size=BATCH_SIZE, collate_fn=finin.collate_fn)
     
-    return train_dataset, val_dataset, train_loader,val_loader
+    return train_dataset, val_dataset, train_loader,val_loader, all_loader
 #%%
 ####################################
 
-def train_finin(train_loader,val_loader,news_feat=768,d_model=128,num_heads=8,BATCH_SIZE = 16,LR = 2e-4,EPOCHS = 50, save = None):
+def train_finin(train_loader,val_loader,news_feat=768,d_model=128,num_heads=8,BATCH_SIZE = 16,LR = 2e-4,EPOCHS = 50, save = None, plot = None):
     gc.collect()
     torch.cuda.empty_cache()
     
@@ -150,6 +158,11 @@ def train_finin(train_loader,val_loader,news_feat=768,d_model=128,num_heads=8,BA
         pct_start=0.1
     )
     
+    train_losses = []
+    val_losses = []
+    all_preds = []
+    all_targets = []
+    
     for epoch in range(EPOCHS):
         model.train()
         train_loss = 0.0 
@@ -161,27 +174,68 @@ def train_finin(train_loader,val_loader,news_feat=768,d_model=128,num_heads=8,BA
             torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
             optimizer.step()
             scheduler.step()
-            train_loss += loss.item()
+            train_loss = loss.item()
         print(f'Epoch {epoch+1}, Loss: {train_loss:.4f}')
         
         model.eval()
     
         val_loss = 0.0
+        epoch_preds = []
+        epoch_targets = []
     
         with torch.no_grad():
             for news_padded, news_masks, stock_feats, targets in tqdm(val_loader):
                 preds = model(news_padded, news_masks, stock_feats)
-                loss = criterion(preds, targets)
+                loss = criterion(preds.squeeze(), targets)
                 val_loss += loss.item()
+                epoch_preds.append(preds.squeeze().cpu().numpy())
+                epoch_targets.append(targets.cpu().numpy())
                 print(preds.item)
                 print(f'loss: {loss:.4f}')
                 
         avg_train_loss = train_loss / len(train_loader)
         avg_val_loss = val_loss / len(val_loader)
+        
+        val_losses.append(avg_val_loss)
+        train_losses.append(avg_train_loss)
+        all_preds.extend(np.concatenate(epoch_preds))
+        all_targets.extend(np.concatenate(epoch_targets))
+
         print(f"Epoch {epoch+1}: Train Loss = {avg_train_loss:.4f}, Val Loss = {avg_val_loss:.4f}")
         
         if save is not None:
-            torch.save(model.state_dict(), f"{save}.pth") 
+            torch.save(model.state_dict(), f"D:\stock_analysis\model\{save}.pth") 
+            
+        if plot is not None:
+                    # ========== Plotting Section ==========
+            plt.figure(figsize=(15, 5))
+            
+            # Plot 1: Actual vs Predicted
+            plt.subplot(1, 2, 1)
+            plt.plot(all_targets[-100:], label='Actual')
+            plt.plot(all_preds[-100:], label='Predicted')
+            plt.title('Actual vs Predicted Prices')
+            plt.xlabel('Time Step')
+            plt.ylabel('Price')
+            plt.legend()
         
+            # Plot 2: Loss Curves
+            plt.subplot(1, 2, 2)
+            # plt.plot(train_losses, label='Training Loss')
+            plt.plot(val_losses, label='Validation Loss')
+            plt.title('Validation Loss')
+            plt.xlabel('Epoch')
+            plt.ylabel('Loss')
+            plt.legend()
+        
+            plt.tight_layout()
+            plt.show()
+        
+        es = finin.EarlyStopping(avg_val_loss)
+        if es.stop_training:
+           print(f"Early stopping triggered at epoch {epoch+1}!")
+           break
+       
+    return model
 
 #%%
